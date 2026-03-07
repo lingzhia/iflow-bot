@@ -128,6 +128,74 @@ class MochatConfig(BaseModel):
     panels: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class WechatWorkConfig(BaseModel):
+    """企业微信配置。
+    
+    支持两种模式：
+    1. 应用机器人：通过企业微信 API 接收和发送消息
+    2. 群机器人：通过 Webhook 发送消息（仅发送）
+    """
+    model_config = {"extra": "ignore"}
+    
+    enabled: bool = False
+    
+    # 企业 ID
+    corp_id: str = ""
+    
+    # 应用配置
+    agent_id: str = ""  # 应用 AgentId
+    secret: str = ""    # 应用 Secret
+    
+    # 回调配置（可选，用于消息验证和加解密）
+    token: str = ""
+    encoding_aes_key: str = ""
+    
+    # 内嵌 HTTP 服务配置（Gateway 模式）
+    callback_port: int = 8788
+    """内嵌 HTTP 回调服务端口。"""
+    
+    callback_host: str = "0.0.0.0"
+    """内嵌 HTTP 回调服务监听地址。"""
+    
+    # 消息接收模式
+    stream_mode: bool = False
+    """是否启用 Stream Mode（长轮询）。
+    
+    False: 回调模式，Gateway 会启动内嵌 HTTP 服务接收回调
+    True: 轮询模式，自动拉取消息（需要中间服务支持）
+    """
+    
+    poll_interval: int = 5
+    """轮询间隔（秒），仅 stream_mode=True 时有效。"""
+    
+    # 权限控制
+    allow_from: list[str] = Field(default_factory=list)
+    """允许的用户 ID 白名单。
+    
+    - 空列表: 允许所有用户
+    - 非空: 只允许列表中的用户 ID
+    """
+    
+    # 群聊配置
+    group_policy: str = "mention"
+    """群聊消息响应策略。
+    
+    - "mention": 只响应 @机器人 的消息
+    - "open": 响应所有群消息
+    - "allowlist": 只响应白名单群的消息
+    """
+    
+    group_allow_from: list[str] = Field(default_factory=list)
+    """群聊白名单，仅 group_policy="allowlist" 时有效。"""
+    
+    # Webhook 配置（群机器人）
+    webhook_url: str = ""
+    """群机器人 Webhook URL（可选）。
+    
+    配置后可通过 send_webhook 方法发送消息到指定群。
+    """
+
+
 class ChannelsConfig(BaseModel):
     model_config = {"extra": "ignore"}
     
@@ -140,6 +208,7 @@ class ChannelsConfig(BaseModel):
     qq: QQConfig = Field(default_factory=QQConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     mochat: MochatConfig = Field(default_factory=MochatConfig)
+    wechat_work: WechatWorkConfig = Field(default_factory=WechatWorkConfig)
     
     send_progress: bool = True
     send_tool_hints: bool = True
@@ -160,7 +229,7 @@ class DriverConfig(BaseModel):
     """通信模式: cli (子进程调用), acp (WebSocket), 或 stdio (直接通过 stdin/stdout)"""
     
     iflow_path: str = "iflow"
-    model: str = "minimax-m2.5"
+    model: str = "GLM-5"
     yolo: bool = True
     thinking: bool = False
     max_turns: int = 40
@@ -194,6 +263,9 @@ class Config(BaseSettings):
         "extra": "ignore",
     }
 
+    # 工作目录（优先级高于 driver.workspace）
+    workspace: Optional[str] = None
+
     # Driver 配置（包含 model, workspace, timeout 等）
     driver: DriverConfig = Field(default_factory=DriverConfig)
 
@@ -208,7 +280,7 @@ class Config(BaseSettings):
         """获取已启用的渠道列表。"""
         enabled = []
         for name in ["telegram", "discord", "whatsapp", "feishu", "slack",
-                     "dingtalk", "qq", "email", "mochat"]:
+                     "dingtalk", "qq", "email", "mochat", "wechat_work"]:
             channel = getattr(self.channels, name, None)
             if channel and getattr(channel, "enabled", False):
                 enabled.append(name)
@@ -217,10 +289,15 @@ class Config(BaseSettings):
     def get_workspace(self) -> str:
         """获取 workspace 路径。
 
-        优先使用 driver.workspace，默认为 ~/.iflow-bot/workspace
+        优先使用顶层 workspace 字段，其次使用 driver.workspace，默认为 ~/.iflow-bot/workspace
         """
+        # 优先使用顶层 workspace 字段
+        if hasattr(self, 'workspace') and self.workspace:
+            return self.workspace
+        # 其次使用 driver.workspace
         if self.driver and self.driver.workspace:
             return self.driver.workspace
+        # 默认值
         return str(Path.home() / ".iflow-bot" / "workspace")
 
     def get_model(self) -> str:

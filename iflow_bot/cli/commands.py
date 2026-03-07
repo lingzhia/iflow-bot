@@ -684,6 +684,118 @@ async def _stop_acp_server(process: asyncio.subprocess.Process) -> None:
             logger.warning(f"Error stopping ACP server: {e}")
 
 
+async def _send_wechat_startup_notification(config, workspace: str, model: str) -> None:
+    """发送企业微信启动通知。"""
+    try:
+        import httpx
+        from datetime import datetime
+        from loguru import logger
+        
+        wechat_config = getattr(config.channels, "wechat_work", None)
+        
+        if not wechat_config or not wechat_config.enabled:
+            return
+        
+        # 获取 access_token
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+                params={
+                    "corpid": wechat_config.corp_id,
+                    "corpsecret": wechat_config.secret,
+                }
+            )
+            data = resp.json()
+            if data.get("errcode", 0) != 0:
+                logger.warning(f"[WeChat Work] Failed to get token: {data.get('errmsg')}")
+                return
+            
+            token = data.get("access_token")
+            
+            # 发送通知消息
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            default_user = getattr(wechat_config, "default_user", None) or "@all"
+            msg_data = {
+                "touser": default_user,
+                "msgtype": "markdown",
+                "agentid": int(wechat_config.agent_id),
+                "markdown": {
+                    "content": f"**iFlow-Bot 服务已启动** 🚀\n\n时间: {now}\n工作目录: {workspace}\n模型: {model}\n\n你现在可以通过企业微信与 AI 对话了！"
+                },
+                "safe": 0,
+            }
+            
+            resp = await client.post(
+                f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}",
+                json=msg_data
+            )
+            result = resp.json()
+            if result.get("errcode", 0) == 0:
+                logger.info("[WeChat Work] Startup notification sent successfully")
+            else:
+                logger.warning(f"[WeChat Work] Failed to send notification: {result.get('errmsg')}")
+                
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"[WeChat Work] Failed to send startup notification: {e}")
+
+
+async def _send_wechat_shutdown_notification(config) -> None:
+    """发送企业微信停止通知。"""
+    try:
+        import httpx
+        from datetime import datetime
+        from loguru import logger
+        
+        wechat_config = getattr(config.channels, "wechat_work", None)
+        
+        if not wechat_config or not wechat_config.enabled:
+            return
+        
+        # 获取 access_token
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+                params={
+                    "corpid": wechat_config.corp_id,
+                    "corpsecret": wechat_config.secret,
+                }
+            )
+            data = resp.json()
+            if data.get("errcode", 0) != 0:
+                logger.warning(f"[WeChat Work] Failed to get token: {data.get('errmsg')}")
+                return
+            
+            token = data.get("access_token")
+            
+            # 发送通知消息
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            default_user = getattr(wechat_config, "default_user", None) or "@all"
+            msg_data = {
+                "touser": default_user,
+                "msgtype": "markdown",
+                "agentid": int(wechat_config.agent_id),
+                "markdown": {
+                    "content": f"**iFlow-Bot 服务已停止** 👋\n\n时间: {now}\n\n服务已关闭，期待下次见面！"
+                },
+                "safe": 0,
+            }
+            
+            resp = await client.post(
+                f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}",
+                json=msg_data
+            )
+            result = resp.json()
+            if result.get("errcode", 0) == 0:
+                logger.info("[WeChat Work] Shutdown notification sent successfully")
+            else:
+                logger.warning(f"[WeChat Work] Failed to send notification: {result.get('errmsg')}")
+                
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"[WeChat Work] Failed to send shutdown notification: {e}")
+
+
 # 内部命令 - 用于后台启动
 @app.command("_run_gateway", hidden=True)
 def _run_gateway_cmd():
@@ -874,11 +986,17 @@ async def _run_gateway(config, verbose: bool = False) -> None:
         console.print(f"[dim]  模式: {mode.upper()}[/dim]")
         console.print("[dim]按 Ctrl+C 停止[/dim]")
         
+        # 发送企业微信启动通知
+        asyncio.create_task(_send_wechat_startup_notification(config, str(workspace), config.get_model()))
+        
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]正在关闭...[/yellow]")
     finally:
+        # 发送企业微信停止通知
+        asyncio.create_task(_send_wechat_shutdown_notification(config))
+        
         heartbeat.stop()
         cron.stop()
         agent_loop.stop()

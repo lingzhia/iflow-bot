@@ -13,6 +13,7 @@ from iflow_bot.channels.dingtalk import DingTalkChannel
 from iflow_bot.channels.qq import QQChannel
 from iflow_bot.channels.email import EmailChannel
 from iflow_bot.channels.mochat import MochatChannel
+from iflow_bot.channels.wechat_work import WechatWorkChannel
 
 __all__ = [
     # Base
@@ -30,4 +31,5 @@ __all__ = [
     "QQChannel",
     "EmailChannel",
     "MochatChannel",
+    "WechatWorkChannel",
 ]

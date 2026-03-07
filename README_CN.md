@@ -19,7 +19,7 @@
 
 ## ✨ 特性
 
-- 🔌 **多渠道支持** - Telegram、Discord、Slack、飞书、钉钉、QQ、WhatsApp、Email、Mochat
+- 🔌 **多渠道支持** - Telegram、Discord、Slack、飞书、钉钉、QQ、WhatsApp、Email、Mochat、企业微信
 - 🧠 **AI 驱动** - 基于 iflow CLI，支持多种模型（GLM-5、Kimi K2.5、MiniMax M2.5 等）
 - 💾 **会话管理** - 自动管理多用户会话，支持对话上下文
 - 📁 **工作空间** - 每个机器人实例拥有独立的工作空间和记忆系统
@@ -486,6 +486,45 @@ docker compose logs -f iflow-bot
   }
 }
 ```
+
+#### 企业微信 (WeChat Work)
+
+```json
+{
+  "wechat_work": {
+    "enabled": true,
+    "corp_id": "YOUR_CORP_ID",
+    "agent_id": "YOUR_AGENT_ID",
+    "secret": "YOUR_APP_SECRET",
+    "token": "",
+    "encoding_aes_key": "",
+    "stream_mode": false,
+    "poll_interval": 5,
+    "allow_from": [],
+    "group_policy": "mention",
+    "group_allow_from": [],
+    "webhook_url": ""
+  }
+}
+```
+
+1. 在 [企业微信管理后台](https://work.weixin.qq.com/) 创建应用
+2. 获取企业 ID（corp_id）、应用 AgentId 和 Secret
+3. 配置回调 URL（可选，用于接收消息）
+4. `group_policy` 控制群聊消息响应策略：
+   - `mention`: 只响应 @机器人 的消息
+   - `open`: 响应所有群消息
+   - `allowlist`: 只响应白名单群的消息
+
+**应用机器人配置**：
+- 支持私聊和群聊消息接收
+- 支持 Markdown 消息发送
+- 支持流式输出（分段发送）
+
+**群机器人配置**：
+- 通过 Webhook 发送消息到群聊
+- 配置 `webhook_url` 即可使用
+- 仅支持发送，不支持接收
 
 ## 🎮 CLI 命令
 

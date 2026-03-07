@@ -24,6 +24,8 @@ from iflow_bot.config.schema import Config
 from iflow_bot.engine.adapter import IFlowAdapter
 from iflow_bot.utils.helpers import get_channel_dir, get_home_dir
 
+logger = logging.getLogger(__name__)
+
 REFERENCE_MODELS = [
     "GLM-4.7",
     "GLM-5",
@@ -66,7 +68,7 @@ MODEL_CONTEXT_SIZES: dict[str, int] = {
 MODEL_LABEL_MAP: dict[str, str] = {model_id: label for label, model_id in MODEL_ID_MAP.items()}
 
 RUNTIME_MODES = ["default", "yolo", "plan", "smart"]
-CHANNEL_NAMES = ["telegram", "discord", "slack", "feishu", "dingtalk", "qq", "whatsapp", "email", "mochat"]
+CHANNEL_NAMES = ["telegram", "discord", "slack", "feishu", "dingtalk", "qq", "whatsapp", "email", "mochat", "wechat_work"]
 RUNTIME_CAPABILITY_LABELS: dict[str, str] = {
     "session/set_mode": "运行模式动态切换",
     "session/set_model": "模型动态切换",
@@ -1212,6 +1214,66 @@ def create_app(token: str | None = None) -> FastAPI:
             service.add_web_log(f"{request.method} {request.url.path} -> 500 ({elapsed_ms}ms) err={e}")
             raise
 
+    @app.on_event("startup")
+    async def _startup() -> None:
+        """应用启动时发送企业微信通知。"""
+        import asyncio
+        from iflow_bot.channels.wechat_work import WechatWorkChannel
+        
+        cfg = service.get_config_obj()
+        wechat_config = getattr(cfg.channels, "wechat_work", None)
+        
+        if wechat_config and wechat_config.enabled:
+            # 异步发送通知，不阻塞启动
+            asyncio.create_task(_send_wechat_startup_notification(wechat_config))
+    
+    async def _send_wechat_startup_notification(wechat_config) -> None:
+        """发送企业微信启动通知。"""
+        try:
+            import httpx
+            
+            # 获取 access_token
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+                    params={
+                        "corpid": wechat_config.corp_id,
+                        "corpsecret": wechat_config.secret,
+                    }
+                )
+                data = resp.json()
+                if data.get("errcode", 0) != 0:
+                    logger.error(f"[WeChat Work] Failed to get token: {data.get('errmsg')}")
+                    return
+                
+                token = data.get("access_token")
+                
+                # 发送通知消息
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                default_user = getattr(wechat_config, "default_user", None) or "@all"
+                msg_data = {
+                    "touser": default_user,
+                    "msgtype": "markdown",
+                    "agentid": int(wechat_config.agent_id),
+                    "markdown": {
+                        "content": f"**iFlow-Bot 服务已启动** 🚀\n\n时间: {now}\n\n你现在可以通过企业微信与 AI 对话了！"
+                    },
+                    "safe": 0,
+                }
+                
+                resp = await client.post(
+                    f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}",
+                    json=msg_data
+                )
+                result = resp.json()
+                if result.get("errcode", 0) == 0:
+                    logger.info("[WeChat Work] Startup notification sent successfully")
+                else:
+                    logger.error(f"[WeChat Work] Failed to send notification: {result.get('errmsg')}")
+                    
+        except Exception as e:
+            logger.error(f"[WeChat Work] Failed to send startup notification: {e}")
+
     @app.on_event("shutdown")
     async def _shutdown() -> None:
         for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access", "iflow_bot"):
@@ -1663,6 +1725,100 @@ def create_app(token: str | None = None) -> FastAPI:
         if keyword:
             lines = [line for line in lines if keyword.lower() in line.lower()]
         return JSONResponse({"ok": True, "lines": lines, "cursor": cursor, "source": source})
+
+    # ========================================================================
+    # 企业微信回调端点
+    # ========================================================================
+
+    @app.get("/wechat/callback")
+    async def wechat_work_callback_verify(
+        request: Request,
+        msg_signature: str = Query(default=""),
+        timestamp: str = Query(default=""),
+        nonce: str = Query(default=""),
+        echostr: str = Query(default=""),
+    ) -> str:
+        """企业微信回调 URL 验证接口。
+
+        企业微信配置回调 URL 时会发送 GET 请求进行验证。
+        需要解密 echostr 并返回解密后的内容。
+        """
+        from iflow_bot.channels.wechat_work import WechatWorkCrypto
+        cfg = service.get_config_obj()
+        wechat_config = getattr(cfg.channels, "wechat_work", None)
+
+        logger.info(f"[WeChat Work] GET callback: msg_signature={msg_signature[:20]}..., timestamp={timestamp}, nonce={nonce}, echostr={echostr[:30]}...")
+
+        if not wechat_config or not wechat_config.enabled:
+            logger.warning("[WeChat Work] Channel disabled")
+            return "disabled"
+
+        if not wechat_config.token or not wechat_config.encoding_aes_key:
+            logger.warning("WeChat Work callback not configured: missing token or encoding_aes_key")
+            return "not configured"
+
+        logger.info(f"[WeChat Work] Config: token={wechat_config.token[:4]}***, corp_id={wechat_config.corp_id}")
+
+        try:
+            crypto = WechatWorkCrypto(wechat_config.encoding_aes_key, wechat_config.corp_id)
+            expected_sig = crypto.generate_signature(wechat_config.token, timestamp, nonce, echostr)
+            logger.info(f"[WeChat Work] Signature check: expected={expected_sig}, got={msg_signature}")
+            if msg_signature != expected_sig:
+                logger.warning(f"WeChat Work callback signature mismatch: expected={expected_sig}, got={msg_signature}")
+                return "invalid signature"
+
+            decrypted = crypto.decrypt(echostr)
+            logger.info(f"WeChat Work callback URL verified successfully, decrypted={decrypted}")
+            return decrypted
+        except Exception as e:
+            logger.error(f"WeChat Work callback verification failed: {e}", exc_info=True)
+            return f"error: {e}"
+
+    @app.post("/wechat/callback")
+    async def wechat_work_callback_message(
+        request: Request,
+        msg_signature: str = Query(default=""),
+        timestamp: str = Query(default=""),
+        nonce: str = Query(default=""),
+    ) -> str:
+        """企业微信回调消息接收接口。
+
+        企业微信通过 POST 请求发送消息到回调 URL。
+        """
+        from iflow_bot.channels.manager import get_channel_class
+
+        cfg = service.get_config_obj()
+        wechat_config = getattr(cfg.channels, "wechat_work", None)
+
+        if not wechat_config or not wechat_config.enabled:
+            logger.warning("[WeChat Work] POST callback but channel disabled")
+            return "success"
+
+        try:
+            body = await request.body()
+            logger.info(f"[WeChat Work] POST callback: msg_signature={msg_signature[:20] if msg_signature else 'None'}..., timestamp={timestamp}, nonce={nonce}")
+            logger.info(f"[WeChat Work] POST body: {body[:200].decode('utf-8', errors='ignore')}...")
+
+            query_params = dict(request.query_params)
+
+            # 获取企业微信 Channel 实例（如果已启动）
+            # 由于 Gateway 是独立进程，这里需要通过消息总线传递
+            # 简化处理：直接解析消息并通过总线发送
+            channel_cls = get_channel_class("wechat_work")
+            if channel_cls is None:
+                logger.warning("WeChat Work channel not registered")
+                return "success"
+
+            # 创建临时实例处理回调
+            from iflow_bot.bus.queue import MessageBus
+            temp_channel = channel_cls(config=wechat_config, bus=None)  # type: ignore
+            result = await temp_channel.handle_callback(body, query_params)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"WeChat Work callback error: {e}", exc_info=True)
+            return "success"
 
     return app
 

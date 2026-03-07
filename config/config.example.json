@@ -41,6 +41,20 @@
       "app_token": "",
       "allow_from": [],
       "group_policy": "mention"
+    },
+    "wechat_work": {
+      "enabled": false,
+      "corp_id": "YOUR_CORP_ID",
+      "agent_id": "YOUR_AGENT_ID",
+      "secret": "YOUR_APP_SECRET",
+      "token": "",
+      "encoding_aes_key": "",
+      "stream_mode": false,
+      "poll_interval": 5,
+      "allow_from": [],
+      "group_policy": "mention",
+      "group_allow_from": [],
+      "webhook_url": ""
     }
   },
   "log_level": "INFO",
