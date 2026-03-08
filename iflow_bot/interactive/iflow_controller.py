@@ -202,15 +202,17 @@ class IFlowController:
         Returns:
             会话信息字典，如果获取失败则返回 None
         """
-        if not self.check_tmux_session():
-            return None
-        
         try:
             info = {
                 "tmux_session": self.tmux_session,
-                "tmux_exists": True,
-                "iflow_running": self.check_iflow_running(),
+                "tmux_exists": self.check_tmux_session(),
+                "iflow_running": False,
             }
+            
+            # 只有当 tmux 会话存在时才检查 iflow
+            if info["tmux_exists"]:
+                info["iflow_running"] = self.check_iflow_running()
+            
             return info
         except Exception as e:
             logger.error(f"[IFlowController] Error getting session info: {e}")
