@@ -44,9 +44,9 @@ print_help() {
     echo "  logs                        查看日志（tail -f）"
     echo
     echo "Interactive 模式命令:"
-    echo "  interactive start [--session <name>]  启动 iflow CLI 交互模式"
-    echo "  interactive status [--session <name>]  查看 iflow CLI 交互模式状态"
-    echo "  interactive stop [--session <name>]   停止 iflow CLI 交互模式"
+    echo "  interactive, -i start [--session <name>]  启动 iflow CLI 交互模式"
+    echo "  interactive, -i status [--session <name>]  查看 iflow CLI 交互模式状态"
+    echo "  interactive, -i stop [--session <name>]   停止 iflow CLI 交互模式"
     echo
     echo "通用:"
     echo "  help                        显示帮助信息"
@@ -59,7 +59,7 @@ print_help() {
     echo
     echo "示例:"
     echo "  $0 start                              # 启动 Gateway 服务"
-    echo "  $0 interactive start                  # 启动 iflow CLI 交互模式"
+    echo "  $0 -i start                           # 启动 iflow CLI 交互模式"
     echo "  $0 interactive start -s my-session    # 启动交互模式，指定会话名"
     echo "  $0 stop                               # 停止服务"
     echo "  $0 status                             # 查看状态"
@@ -525,9 +525,30 @@ case "${1:-help}" in
     logs)
         do_logs
         ;;
-    interactive)
+    interactive|-i)
         shift
-        case "${1:-help}" in
+        if [[ -z "$1" || "$1" == "--help" || "$1" == "-h" ]]; then
+            echo "用法: $0 interactive [start|status|stop] [选项]"
+            echo
+            echo "命令:"
+            echo "  start    启动 iflow CLI 交互模式"
+            echo "  status   查看 iflow CLI 交互模式状态"
+            echo "  stop     停止 iflow CLI 交互模式"
+            echo
+            echo "选项:"
+            echo "  --session, -s <name>     指定 tmux 会话名称（默认: iflow）"
+            echo "  --workspace, -w <path>   指定 iflow 工作目录（默认: ~/.iflow）"
+            echo "  --model, -m <name>       指定 iflow 模型（默认: kimi-k2.5）"
+            echo "  --no-auto-start          不自动启动 iflow"
+            echo
+            echo "示例:"
+            echo "  $0 interactive start              # 启动交互模式"
+            echo "  $0 -i start -s my-session         # 启动交互模式，指定会话名"
+            echo "  $0 interactive status             # 查看状态"
+            exit 0
+        fi
+        
+        case "$1" in
             start)
                 shift
                 do_interactive_start "$@"
