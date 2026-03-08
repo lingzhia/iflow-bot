@@ -36,26 +36,33 @@ print_banner() {
 print_help() {
     echo "用法: $0 [命令] [选项]"
     echo
-    echo "命令:"
-    echo "  start [--workspace <path>]  启动服务（可指定工作目录）"
+    echo "Gateway 服务命令:"
+    echo "  start [--workspace <path>]  启动 Gateway 服务（可指定工作目录）"
     echo "  stop                        停止服务"
     echo "  restart [--workspace <path>] 重启服务"
     echo "  status                      查看服务状态"
     echo "  logs                        查看日志（tail -f）"
+    echo
+    echo "Interactive 模式命令:"
+    echo "  interactive start [--session <name>]  启动 iflow CLI 交互模式"
+    echo "  interactive status [--session <name>]  查看 iflow CLI 交互模式状态"
+    echo "  interactive stop [--session <name>]   停止 iflow CLI 交互模式"
+    echo
+    echo "通用:"
     echo "  help                        显示帮助信息"
     echo
     echo "选项:"
     echo "  --workspace, -w <path>      指定工作目录（默认: ~/.iflow-bot/workspace）"
     echo "  --daemon, -d                后台运行（默认）"
     echo "  --foreground, -f            前台运行（调试模式）"
+    echo "  --session, -s <name>        指定 tmux 会话名称（默认: iflow）"
     echo
     echo "示例:"
-    echo "  $0 start                              # 使用默认工作目录启动"
-    echo "  $0 start -w ~/my-workspace            # 指定工作目录启动"
-    echo "  $0 start --workspace /path/to/ws      # 指定工作目录启动"
+    echo "  $0 start                              # 启动 Gateway 服务"
+    echo "  $0 interactive start                  # 启动 iflow CLI 交互模式"
+    echo "  $0 interactive start -s my-session    # 启动交互模式，指定会话名"
     echo "  $0 stop                               # 停止服务"
     echo "  $0 status                             # 查看状态"
-    echo "  $0 logs                               # 查看日志"
 }
 
 # 检查服务是否运行
@@ -403,6 +410,102 @@ do_logs() {
     tail -f "$LOG_FILE"
 }
 
+# ============================================================================
+# Interactive 模式命令
+# ============================================================================
+
+do_interactive_start() {
+    local session="iflow"
+    local workspace="$HOME/.iflow"
+    local auto_start=true
+    local model="kimi-k2.5"
+    
+    # 解析参数
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --session|-s)
+                session="$2"
+                shift 2
+                ;;
+            --workspace|-w)
+                workspace="$2"
+                shift 2
+                ;;
+            --model|-m)
+                model="$2"
+                shift 2
+                ;;
+            --no-auto-start)
+                auto_start=false
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    print_banner
+    echo -e "${CYAN}启动 iflow CLI 交互模式...${NC}"
+    echo
+    echo -e "tmux 会话: ${CYAN}$session${NC}"
+    echo -e "工作目录: ${CYAN}$workspace${NC}"
+    echo -e "模型: ${CYAN}$model${NC}"
+    echo
+    
+    python3 -m iflow_bot.cli.commands interactive start \
+        --session "$session" \
+        --workspace "$workspace" \
+        --model "$model" \
+        $([ "$auto_start" = true ] && echo "--auto-start" || echo "--no-auto-start")
+}
+
+do_interactive_status() {
+    local session="iflow"
+    local workspace="$HOME/.iflow"
+    
+    # 解析参数
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --session|-s)
+                session="$2"
+                shift 2
+                ;;
+            --workspace|-w)
+                workspace="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    python3 -m iflow_bot.cli.commands interactive status \
+        --session "$session" \
+        --workspace "$workspace"
+}
+
+do_interactive_stop() {
+    local session="iflow"
+    
+    # 解析参数
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --session|-s)
+                session="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    python3 -m iflow_bot.cli.commands interactive stop \
+        --session "$session"
+}
+
 # 主入口
 case "${1:-help}" in
     start)
@@ -421,6 +524,29 @@ case "${1:-help}" in
         ;;
     logs)
         do_logs
+        ;;
+    interactive)
+        shift
+        case "${1:-help}" in
+            start)
+                shift
+                do_interactive_start "$@"
+                ;;
+            status)
+                shift
+                do_interactive_status "$@"
+                ;;
+            stop)
+                shift
+                do_interactive_stop "$@"
+                ;;
+            *)
+                echo -e "${RED}未知命令: $0 interactive $1${NC}"
+                echo
+                echo "用法: $0 interactive [start|status|stop] [选项]"
+                exit 1
+                ;;
+        esac
         ;;
     help|--help|-h)
         print_banner

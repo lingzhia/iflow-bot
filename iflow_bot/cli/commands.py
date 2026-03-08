@@ -1746,5 +1746,156 @@ def cron_run(
     asyncio.run(run_job())
 
 
+# ============================================================================
+# Interactive 命令组
+# ============================================================================
+
+interactive_app = typer.Typer(help="iflow CLI 交互模式管理")
+app.add_typer(interactive_app, name="interactive")
+
+
+@interactive_app.callback()
+def interactive_callback():
+    """iflow CLI 交互模式命令。"""
+    pass
+
+
+@interactive_app.command("start")
+def interactive_start(
+    tmux_session: str = typer.Option("iflow", "--session", "-s", help="tmux 会话名称"),
+    workspace: str = typer.Option("~/.iflow", "--workspace", "-w", help="iflow 工作目录"),
+    auto_start: bool = typer.Option(True, "--auto-start/--no-auto-start", help="自动启动 iflow"),
+    model: str = typer.Option("kimi-k2.5", "--model", "-m", help="iflow 模型"),
+) -> None:
+    """启动 iflow CLI 交互模式（与企业微信同步）。"""
+    print_banner()
+    
+    console.print(f"[bold cyan]{__logo__}[/bold cyan] 启动 iflow CLI 交互模式")
+    console.print()
+    console.print(f"  tmux 会话: [cyan]{tmux_session}[/cyan]")
+    console.print(f"  工作目录: [cyan]{workspace}[/cyan]")
+    console.print(f"  模型: [cyan]{model}[/cyan]")
+    console.print()
+    
+    async def run_sync():
+        from iflow_bot.interactive.sync_manager import SyncManager
+        from iflow_bot.interactive.iflow_controller import IFlowController
+        from iflow_bot.bus.queue import MessageBus
+        
+        # 创建消息总线
+        bus = MessageBus()
+        
+        # 创建同步管理器
+        manager = SyncManager(
+            workspace=workspace,
+            tmux_session=tmux_session,
+            bus=bus,
+            wechat_channel="wechat_work",
+        )
+        
+        # 检查 iflow 是否运行
+        controller = IFlowController(tmux_session)
+        if not controller.check_iflow_running():
+            if auto_start:
+                console.print("[yellow]iflow 未运行，正在启动...[/yellow]")
+                if not controller.start_iflow(model):
+                    console.print("[red]✗ iflow 启动失败[/red]")
+                    raise typer.Exit(1)
+                console.print("[green]✓ iflow 启动成功[/green]")
+            else:
+                console.print("[red]✗ iflow 未运行（使用 --auto-start 自动启动）[/red]")
+                raise typer.Exit(1)
+        
+        # 启动同步服务
+        console.print("[yellow]正在启动同步服务...[/yellow]")
+        if not await manager.start(auto_start_iflow=False):
+            console.print("[red]✗ 同步服务启动失败[/red]")
+            raise typer.Exit(1)
+        
+        console.print("[green]✓ 同步服务已启动[/green]")
+        console.print()
+        console.print("[dim]使用方式:[/dim]")
+        console.print(f"  电脑: tmux attach -t {tmux_session}")
+        console.print("  手机: 通过企业微信发送消息")
+        console.print()
+        console.print("[dim]按 Ctrl+C 停止服务[/dim]")
+        console.print()
+        
+        # 运行同步服务
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            console.print()
+            console.print("[yellow]正在停止同步服务...[/yellow]")
+            await manager.stop()
+            console.print("[green]✓ 同步服务已停止[/green]")
+    
+    asyncio.run(run_sync())
+
+
+@interactive_app.command("status")
+def interactive_status(
+    tmux_session: str = typer.Option("iflow", "--session", "-s", help="tmux 会话名称"),
+    workspace: str = typer.Option("~/.iflow", "--workspace", "-w", help="iflow 工作目录"),
+) -> None:
+    """查看 iflow CLI 交互模式状态。"""
+    from iflow_bot.interactive.iflow_controller import IFlowController
+    from iflow_bot.interactive.session_monitor import SessionMonitor
+    
+    console.print(f"[bold cyan]{__logo__}[/bold cyan] iflow CLI 交互模式状态")
+    console.print()
+    
+    # 检查 tmux 会话
+    controller = IFlowController(tmux_session)
+    session_info = controller.get_session_info()
+    
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("项目", style="dim")
+    table.add_column("状态")
+    
+    if session_info:
+        table.add_row("tmux 会话", f"[green]存在[/green]" if session_info["tmux_exists"] else "[red]不存在[/red]")
+        table.add_row("iflow 运行", f"[green]运行中[/green]" if session_info["iflow_running"] else "[red]未运行[/red]")
+    else:
+        table.add_row("tmux 会话", "[red]检查失败[/red]")
+    
+    console.print(table)
+    
+    # 检查会话文件
+    monitor = SessionMonitor(workspace)
+    session_file = monitor.find_latest_session()
+    
+    console.print()
+    console.print("[bold]会话文件:[/bold]")
+    if session_file:
+        console.print(f"  [cyan]{session_file}[/cyan]")
+    else:
+        console.print("  [red]未找到会话文件[/red]")
+
+
+@interactive_app.command("stop")
+def interactive_stop(
+    tmux_session: str = typer.Option("iflow", "--session", "-s", help="tmux 会话名称"),
+) -> None:
+    """停止 iflow CLI 交互模式。"""
+    from iflow_bot.interactive.iflow_controller import IFlowController
+    
+    console.print(f"[bold cyan]{__logo__}[/bold cyan] 停止 iflow CLI 交互模式")
+    console.print()
+    
+    controller = IFlowController(tmux_session)
+    
+    if not controller.check_tmux_session():
+        console.print(f"[yellow]tmux 会话 '{tmux_session}' 不存在[/yellow]")
+        return
+    
+    console.print(f"[yellow]正在停止 tmux 会话 '{tmux_session}'...[/yellow]")
+    if controller.stop_iflow():
+        console.print("[green]✓ 已停止[/green]")
+    else:
+        console.print("[red]✗ 停止失败[/red]")
+
+
 if __name__ == "__main__":
     app()
