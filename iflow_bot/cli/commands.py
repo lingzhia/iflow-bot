@@ -1780,17 +1780,15 @@ def interactive_start(
     async def run_sync():
         from iflow_bot.interactive.sync_manager import SyncManager
         from iflow_bot.interactive.iflow_controller import IFlowController
-        from iflow_bot.bus.queue import MessageBus
         
-        # 创建消息总线
-        bus = MessageBus()
+        # 加载配置
+        config = load_config()
         
         # 创建同步管理器
         manager = SyncManager(
             workspace=workspace,
             tmux_session=tmux_session,
-            bus=bus,
-            wechat_channel="wechat_work",
+            wechat_config=config.channels.wechat_work,
         )
         
         # 检查 iflow 是否运行
