@@ -104,8 +104,11 @@ class SyncManager:
             logger.warning("[SyncManager] WeChat Work not configured or disabled, running without WeChat sync")
         
         # 查找会话文件
-        if not self.monitor.find_latest_session():
+        session_files = self.monitor.find_session_files()
+        if not session_files:
             logger.warning("[SyncManager] No session file found, waiting...")
+        else:
+            logger.info(f"[SyncManager] Found {len(session_files)} session file(s)")
         
         self.running = True
         

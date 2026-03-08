@@ -1862,12 +1862,17 @@ def interactive_status(
     
     # 检查会话文件
     monitor = SessionMonitor(workspace)
-    session_file = monitor.find_latest_session()
+    session_info = monitor.get_session_info()
     
     console.print()
     console.print("[bold]会话文件:[/bold]")
-    if session_file:
-        console.print(f"  [cyan]{session_file}[/cyan]")
+    if session_info["total_sessions"] > 0:
+        console.print(f"  [cyan]找到 {session_info['total_sessions']} 个会话文件[/cyan]")
+        for i, session_file in enumerate(session_info["session_files"][:3], 1):  # 只显示前3个
+            console.print(f"  {i}. {session_file}")
+        if session_info["total_sessions"] > 3:
+            console.print(f"  ... 还有 {session_info['total_sessions'] - 3} 个会话文件")
+        console.print(f"  [dim]已处理 {session_info['processed_messages']} 条消息[/dim]")
     else:
         console.print("  [red]未找到会话文件[/red]")
 
