@@ -199,16 +199,20 @@ class WechatWorkChannel(BaseChannel):
     # API 基础 URL
     API_BASE = "https://qyapi.weixin.qq.com/cgi-bin"
     
-    def __init__(self, config: WechatWorkConfig, bus: MessageBus):
+    def __init__(self, config: WechatWorkConfig, bus: Optional[MessageBus] = None):
         """初始化企业微信 Channel。
         
         Args:
             config: 企业微信配置对象
-            bus: 消息总线实例
+            bus: 消息总线实例（可选，用于独立模式）
         """
-        super().__init__(config, bus)
+        super().__init__(config, bus if bus is not None else MessageBus())
         self.config: WechatWorkConfig = config
+        self._bus = bus
         self._http: Optional[httpx.AsyncClient] = None
+        
+        # 消息处理器（用于独立模式）
+        self._message_handler = None
         
         # Access Token 管理
         self._access_token: Optional[str] = None
@@ -898,6 +902,16 @@ class WechatWorkChannel(BaseChannel):
             self._streaming_last_sent_at.pop(chat_id, None)
             logger.debug(f"[{self.name}] Cleaned up streaming buffers for {chat_id}")
     
+    def set_message_handler(self, handler) -> None:
+        """设置消息处理器（用于独立模式）。
+        
+        Args:
+            handler: 消息处理器回调函数，签名为：
+                      handler(content, sender_id, chat_id, is_group, metadata)
+        """
+        self._message_handler = handler
+        logger.debug(f"[{self.name}] Message handler set: {handler}")
+    
     async def _on_message(
         self,
         content: str,
@@ -916,16 +930,30 @@ class WechatWorkChannel(BaseChannel):
                 {"is_group": is_group}
             )
             logger.info(f"[{self.name}] Sent confirmation message to {chat_id}")
-
-            # 发布消息到总线进行处理
-            await self._handle_message(
-                sender_id=sender_id,
-                chat_id=chat_id,
-                content=content,
-                metadata=metadata or {"is_group": is_group},
-            )
         except Exception as e:
-            logger.error(f"[{self.name}] Error publishing message: {e}")
+            logger.error(f"[{self.name}] Failed to send confirmation message: {e}")
+        
+        # 检查是否使用独立模式的消息处理器
+        if self._message_handler is not None:
+            try:
+                await self._message_handler(content, sender_id, chat_id, is_group, metadata)
+                return
+            except Exception as e:
+                logger.error(f"[{self.name}] Message handler error: {e}")
+        
+        # 否则使用默认的消息总线
+        if self._bus is not None:
+            try:
+                await self._handle_message(
+                    sender_id=sender_id,
+                    chat_id=chat_id,
+                    content=content,
+                    metadata=metadata or {"is_group": is_group},
+                )
+            except Exception as e:
+                logger.error(f"[{self.name}] Error publishing message: {e}")
+        else:
+            logger.warning(f"[{self.name}] No message handler or bus, message dropped")
     
     async def health_check(self) -> bool:
         """健康检查。
