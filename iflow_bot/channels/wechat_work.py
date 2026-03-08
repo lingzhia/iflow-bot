@@ -601,6 +601,14 @@ class WechatWorkChannel(BaseChannel):
             await self._send_message(chat_id, reply, {"is_group": is_group})
             return
         
+        # 发送确认消息
+        try:
+            confirmation_msg = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
+            await self._send_message(chat_id, confirmation_msg, {"is_group": is_group})
+            logger.info(f"[{self.name}] Sent confirmation message to {chat_id}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to send confirmation message: {e}")
+        
         # 发布到消息总线
         await self._handle_message(
             sender_id=from_user,
@@ -615,12 +623,24 @@ class WechatWorkChannel(BaseChannel):
         )
     
     async def send(self, msg: OutboundMessage) -> None:
-        """发送消息（非流式）。
+        """发送消息。
         
         Args:
             msg: 出站消息对象
         """
-        await self._send_message(msg.chat_id, msg.content, msg.metadata)
+        # 检查是否为流式输出的进度消息
+        is_progress = msg.metadata.get("_progress", False)
+        is_final = msg.metadata.get("_streaming_end", False)
+        
+        logger.info(f"[{self.name}] send() called: chat_id={msg.chat_id}, content_len={len(msg.content)}, "
+                   f"is_progress={is_progress}, is_final={is_final}, metadata={msg.metadata}")
+        
+        if is_progress or is_final:
+            # 流式输出：调用 handle_streaming_chunk
+            await self.handle_streaming_chunk(msg.chat_id, msg.content, is_final=is_final)
+        else:
+            # 非流式：正常发送
+            await self._send_message(msg.chat_id, msg.content, msg.metadata)
     
     async def _send_message(
         self,
@@ -800,12 +820,24 @@ class WechatWorkChannel(BaseChannel):
             chunk: 累积后的完整文本内容
             is_final: 是否是最终消息
         """
+        logger.info(f"[{self.name}] handle_streaming_chunk called: chat_id={chat_id}, is_final={is_final}, chunk_len={len(chunk)}")
+        
         # 确保缓冲区已初始化
         if chat_id not in self._streaming_buffers:
             await self.start_streaming(chat_id)
         
+        # 如果是最终消息且内容为空，说明这是流式结束标记，直接清理返回
+        if is_final and not chunk.strip():
+            logger.debug(f"[{self.name}] Final message with empty content, cleaning up")
+            self._streaming_buffers.pop(chat_id, None)
+            self._streaming_message_ids.pop(chat_id, None)
+            self._streaming_last_content.pop(chat_id, None)
+            self._streaming_last_sent_at.pop(chat_id, None)
+            return
+        
         full_content = chunk.strip()
         if not full_content:
+            logger.warning(f"[{self.name}] Empty content after strip, skipping")
             return
         
         now = time.time()
@@ -814,35 +846,57 @@ class WechatWorkChannel(BaseChannel):
         
         # 流式输出策略：
         # 1. 首次发送完整消息
-        # 2. 后续每 3 秒或内容变化超过 100 字符发送更新消息
+        # 2. 后续每 1 秒或内容变化超过 20 字符发送更新消息（只发送新增部分）
         # 3. 最终消息确保完整发送
         should_send = (
             last_content == ""  # 首次
             or is_final  # 最终消息
-            or (len(full_content) - len(last_content) >= 100)  # 内容变化大
-            or (now - last_sent_at >= 3.0)  # 时间间隔
+            or (len(full_content) - len(last_content) >= 20)  # 内容变化大
+            or (now - last_sent_at >= 1.0)  # 时间间隔
         )
         
+        logger.debug(f"[{self.name}] should_send check: last_empty={last_content == ''}, is_final={is_final}, "
+                    f"content_diff={len(full_content) - len(last_content)}, time_diff={now - last_sent_at}")
+        
         if not should_send:
+            logger.debug(f"[{self.name}] Skipping send, conditions not met")
             return
+        
+        # 计算要发送的内容（只发送新增部分）
+        if last_content and full_content.startswith(last_content):
+            # 只发送新增的内容
+            content_to_send = full_content[len(last_content):]
+        else:
+            # 首次发送或内容不连续，发送完整内容
+            content_to_send = full_content
+        
+        if not content_to_send.strip():
+            logger.debug(f"[{self.name}] No new content to send")
+            return
+        
+        logger.info(f"[{self.name}] Sending message to WeChat Work: chat_id={chat_id}, "
+                   f"new_content_len={len(content_to_send)}, total_len={len(full_content)}, is_final={is_final}")
         
         # 发送消息
         msg_id = await self._send_message(
             chat_id,
-            full_content,
+            content_to_send,
             {"is_group": False},  # 简化处理
         )
+        
+        logger.info(f"[{self.name}] Message sent result: msg_id={msg_id}")
         
         if msg_id:
             self._streaming_last_content[chat_id] = full_content
             self._streaming_last_sent_at[chat_id] = now
-            
-            if is_final:
-                # 清理
-                self._streaming_buffers.pop(chat_id, None)
-                self._streaming_message_ids.pop(chat_id, None)
-                self._streaming_last_content.pop(chat_id, None)
-                self._streaming_last_sent_at.pop(chat_id, None)
+        
+        # 如果是最终消息，清理资源
+        if is_final:
+            self._streaming_buffers.pop(chat_id, None)
+            self._streaming_message_ids.pop(chat_id, None)
+            self._streaming_last_content.pop(chat_id, None)
+            self._streaming_last_sent_at.pop(chat_id, None)
+            logger.debug(f"[{self.name}] Cleaned up streaming buffers for {chat_id}")
     
     async def _on_message(
         self,
@@ -854,6 +908,16 @@ class WechatWorkChannel(BaseChannel):
     ) -> None:
         """处理入站消息的内部方法。"""
         try:
+            # 立即发送确认消息
+            confirmation_msg = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
+            await self._send_message(
+                chat_id,
+                confirmation_msg,
+                {"is_group": is_group}
+            )
+            logger.info(f"[{self.name}] Sent confirmation message to {chat_id}")
+
+            # 发布消息到总线进行处理
             await self._handle_message(
                 sender_id=sender_id,
                 chat_id=chat_id,

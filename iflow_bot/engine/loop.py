@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 
 # 支持流式输出的渠道列表
-STREAMING_CHANNELS = {"telegram", "discord", "slack", "dingtalk", "qq", "feishu"}
+STREAMING_CHANNELS = {"telegram", "discord", "slack", "dingtalk", "qq", "feishu", "wechat_work"}
 
 # 流式输出缓冲区大小范围（字符数）
 STREAM_BUFFER_MIN = 10
