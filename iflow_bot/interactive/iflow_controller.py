@@ -93,19 +93,19 @@ class IFlowController:
             # 转义单引号（tmux 使用单引号）
             escaped_message = message.replace("'", "'\\''")
             
-            # 构建 tmux 命令
-            # 使用 C-m 模拟 Enter 键
-            cmd = [
-                "tmux",
-                "send-keys",
-                "-t",
-                self.tmux_session,
-                escaped_message,
-                "C-m"
-            ]
+            # 分两次发送：先发送消息内容，再发送回车键
+            subprocess.run(
+                ["tmux", "send-keys", "-t", self.tmux_session, escaped_message],
+                capture_output=True,
+                timeout=5
+            )
             
-            # 执行命令
-            result = subprocess.run(cmd, capture_output=True, timeout=10)
+            # 发送回车键
+            result = subprocess.run(
+                ["tmux", "send-keys", "-t", self.tmux_session, "C-m"],
+                capture_output=True,
+                timeout=5
+            )
             
             if result.returncode != 0:
                 logger.error(f"[IFlowController] Failed to send message: {result.stderr.decode()}")
