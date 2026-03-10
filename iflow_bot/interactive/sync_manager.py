@@ -88,15 +88,20 @@ class SyncManager:
             )
             
             # 设置消息处理器
-            self.wechat_channel.set_message_handler(
-                lambda content, sender_id, chat_id, is_group, metadata:
-                    self.receive_wechat_message(content, sender_id, chat_id, metadata)
-            )
+            async def _message_handler(content: str, sender_id: str, chat_id: str, is_group: bool, metadata: Optional[dict] = None) -> None:
+                """异步消息处理器包装函数。"""
+                await self.receive_wechat_message(content, sender_id, chat_id, metadata)
+            
+            self.wechat_channel.set_message_handler(_message_handler)
             
             # 启动企业微信渠道
             try:
-                await self.wechat_channel.start()
+                logger.info("[SyncManager] Starting WeChat Work channel...")
+                await asyncio.wait_for(self.wechat_channel.start(), timeout=30)
                 logger.info("[SyncManager] WeChat Work channel started")
+            except asyncio.TimeoutError:
+                logger.error("[SyncManager] WeChat Work channel start timed out")
+                self.wechat_channel = None
             except Exception as e:
                 logger.error(f"[SyncManager] Failed to start WeChat Work channel: {e}")
                 self.wechat_channel = None
@@ -245,7 +250,7 @@ class SyncManager:
             logger.error(f"[SyncManager] Failed to send to iflow: {e}")
             self.stats["errors"] += 1
     
-    def receive_wechat_message(self, content: str, sender_id: str, chat_id: str, metadata: Optional[dict] = None) -> None:
+    async def receive_wechat_message(self, content: str, sender_id: str, chat_id: str, metadata: Optional[dict] = None) -> None:
         """接收企业微信消息。
         
         由企业微信渠道调用此方法，将消息放入队列。

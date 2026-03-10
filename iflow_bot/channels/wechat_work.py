@@ -206,7 +206,7 @@ class WechatWorkChannel(BaseChannel):
             config: 企业微信配置对象
             bus: 消息总线实例（可选，用于独立模式）
         """
-        super().__init__(config, bus if bus is not None else MessageBus())
+        super().__init__(config, bus)
         self.config: WechatWorkConfig = config
         self._bus = bus
         self._http: Optional[httpx.AsyncClient] = None
@@ -594,17 +594,6 @@ class WechatWorkChannel(BaseChannel):
             f"in {'group' if is_group else 'private'}: {content[:50]}..."
         )
         
-        # 如果 bus 为 None（通过 Web Console 回调），直接回复测试消息
-        if self.bus is None:
-            logger.info(f"[{self.name}] No bus configured, sending direct reply")
-            # 初始化 HTTP 客户端
-            if self._http is None:
-                self._http = httpx.AsyncClient(timeout=30.0)
-            # 发送回复
-            reply = f"收到您的消息：{content}\n\n⚠️ 如果low-bot Gateway 未启动，消息将不会被 AI 处理。请启动 Gateway 服务以获得完整功能。"
-            await self._send_message(chat_id, reply, {"is_group": is_group})
-            return
-        
         # 发送确认消息
         try:
             confirmation_msg = f"✅ 收到消息\n\n正在处理中...\n\n消息内容: {content[:100]}{'...' if len(content) > 100 else ''}"
@@ -613,7 +602,30 @@ class WechatWorkChannel(BaseChannel):
         except Exception as e:
             logger.error(f"[{self.name}] Failed to send confirmation message: {e}")
         
-        # 发布到消息总线
+        # 如果 bus 为 None（独立模式），检查是否有自定义消息处理器
+        if self.bus is None:
+            if self._message_handler is not None:
+                # 调用自定义消息处理器（连接到 iflow CLI）
+                logger.info(f"[{self.name}] Using custom message handler for independent mode")
+                await self._message_handler(content, from_user, chat_id, is_group, {
+                    "msg_type": msg_type,
+                    "to_user": to_user,
+                    "create_time": create_time,
+                    "is_group": is_group,
+                })
+                return
+            else:
+                # 没有消息处理器，直接回复
+                logger.info(f"[{self.name}] No message handler configured, sending direct reply")
+                # 初始化 HTTP 客户端
+                if self._http is None:
+                    self._http = httpx.AsyncClient(timeout=30.0)
+                # 发送回复
+                reply = f"收到您的消息：{content}\n\n⚠️ 交互模式下未连接到 iflow CLI。"
+                await self._send_message(chat_id, reply, {"is_group": is_group})
+                return
+        
+        # 发布到消息总线（Gateway 模式）
         await self._handle_message(
             sender_id=from_user,
             chat_id=chat_id,
